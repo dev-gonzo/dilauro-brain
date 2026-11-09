@@ -1,0 +1,89 @@
+name: brain
+
+services:
+  brain-go:
+    build:
+      context: ./go-service
+    container_name: brain-go
+    environment:
+      BRAIN_PORT: "47180"
+      BRAIN_ALLOWED_ORIGINS: http://127.0.0.1:4201,http://localhost:4201,https://dilauro.com.br,https://*.dilauro.com.br
+      PYTHON_SERVICE_URL: http://brain-python:47181
+      POSTGRES_HOST: brain-postgres
+      POSTGRES_PORT: "47182"
+      DATABASE_URL: postgres://${POSTGRES_USER:-brain}:${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}@brain-postgres:47182/${POSTGRES_DB:-brain}?sslmode=disable
+    depends_on:
+      brain-python:
+        condition: service_healthy
+      brain-migrations:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:47180:47180"
+    networks:
+      - brain-network
+    restart: unless-stopped
+
+  brain-python:
+    build:
+      context: ./python-service
+    container_name: brain-python
+    environment:
+      BRAIN_PORT: "47181"
+    ports:
+      - "127.0.0.1:47181:47181"
+    networks:
+      - brain-network
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  brain-postgres:
+    image: postgres:17-alpine
+    container_name: brain-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-brain}
+      POSTGRES_USER: ${POSTGRES_USER:-brain}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}
+    ports:
+      - "127.0.0.1:47182:47182"
+    command: ["postgres", "-p", "47182"]
+    volumes:
+      - brain-postgres-data:/var/lib/postgresql/data
+    networks:
+      - brain-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -p 47182"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  brain-migrations:
+    image: flyway/flyway:11-alpine
+    container_name: brain-migrations
+    command:
+      - -url=jdbc:postgresql://brain-postgres:47182/${POSTGRES_DB:-brain}
+      - -user=${POSTGRES_USER:-brain}
+      - -password=${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}
+      - -connectRetries=60
+      - migrate
+    volumes:
+      - ./migrations:/flyway/sql:ro
+    networks:
+      - brain-network
+    depends_on:
+      brain-postgres:
+        condition: service_healthy
+
+networks:
+  brain-network:
+    name: brain-network
+
+volumes:
+  brain-postgres-data:
+    name: brain-postgres-data
